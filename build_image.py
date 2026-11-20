@@ -1,254 +1,267 @@
 #!/usr/bin/env python3
-"""Draw the 19 November 2026 world-news front page as a 1024x1024 PNG.
+"""Draw the 19 November 2026 front page: 'The World in One Picture'.
 
-Everything is drawn with PIL vector shapes and real Noto fonts -- no AI
-image generation, so no text can come out garbled. Layout is measured with
-PIL's own text metrics; every block asserts it stays inside its panel.
-
-Layout: masthead -> huge date -> lead feature (left text, scales-of-justice
-art right) -> five full-width story rows, each with a small icon at the
-right -> dark ticker band at the bottom.
+A broadsheet-style newspaper front page rendered entirely with PIL shapes
+and text (no generated imagery, so every letter stays crisp). Run it and it
+writes entry.png next to this file.
 """
+
 import math
+import os
+
 from PIL import Image, ImageDraw, ImageFont
 
-W = H = 1024
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT_PATH = os.path.join(HERE, "entry.png")
+
+PAGE_W, PAGE_H = 1024, 1024
+PAPER = (246, 241, 229)   # #f6f1e5
+INK = (22, 24, 29)       # #16181d
+RED = (179, 49, 42)      # #b3312a
+NAVY = (36, 66, 92)      # #24425c
+WHITE = (255, 255, 255)
+
+FONT_DIR = "/usr/share/fonts/truetype/noto"
+
+SERIF_BLACK = os.path.join(FONT_DIR, "NotoSerif-Black.ttf")
+SANS_BLACK = os.path.join(FONT_DIR, "NotoSans-Black.ttf")
+SANS_BOLD = os.path.join(FONT_DIR, "NotoSans-Bold.ttf")
+
 MARGIN = 28
-CX0, CX1 = MARGIN, W - MARGIN          # content box: 28..996 (968 wide)
-PAPER = (246, 241, 229)                # #f6f1e5
-INK = (22, 24, 29)                     # #16181d
-RED = (179, 49, 42)                    # #b3312a
-NAVY = (36, 66, 92)                    # #24425c
-CREAM = (246, 241, 229)
-
-FONT_DIR = "/usr/share/fonts/truetype/noto/"
+TEXT_W = PAGE_W - 2 * MARGIN          # 968, full-width text column
+ICON_W = 78                           # reserved strip at the right of rows
+ROW_TEXT_W = TEXT_W - ICON_W - 12     # text width inside a story row
 
 
-def font(name, size):
-    return ImageFont.truetype(FONT_DIR + name, size)
+def load(path, size):
+    return ImageFont.truetype(path, size)
 
 
-SERIF_BLACK = "NotoSerif-Black.ttf"
-SERIF_BOLD = "NotoSerif-Bold.ttf"
-SANS_BLACK = "NotoSans-Black.ttf"
-SANS_BOLD = "NotoSans-Bold.ttf"
-SANS_REG = "NotoSans-Regular.ttf"
-COND_BOLD = "NotoSans-CondensedBold.ttf"
-
-
-def wrap(draw, text, fnt, width):
-    """Greedy word wrap measured with real glyph widths."""
-    lines, cur = [], ""
+def wrap_text(draw, text, font, max_width):
+    """Greedy word wrap returning a list of lines that fit max_width."""
+    lines, current = [], ""
     for word in text.split():
-        trial = (cur + " " + word).strip()
-        if draw.textlength(trial, font=fnt) <= width:
-            cur = trial
+        trial = word if not current else current + " " + word
+        if draw.textlength(trial, font=font) <= max_width:
+            current = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
     return lines
 
 
-def block(draw, x, y, text, fnt, lh, width, fill=INK):
-    """Draw a wrapped left-aligned block; return the y just past it."""
-    for line in wrap(draw, text, fnt, width):
-        draw.text((x, y), line, font=fnt, fill=fill)
-        y += lh
-    return y
+def fit_lines(draw, text, font, max_width, limit):
+    """Wrap text and clip to at most `limit` lines."""
+    return wrap_text(draw, text, font, max_width)[:limit]
 
 
-def hrule(draw, y, x0=CX0, x1=CX1, wdt=2, fill=INK):
-    draw.line([(x0, y), (x1, y)], fill=fill, width=wdt)
+def double_rule(draw, y, x0=MARGIN, x1=PAGE_W - MARGIN, gap=6):
+    draw.line([(x0, y), (x1, y)], fill=INK, width=2)
+    draw.line([(x0, y + gap), (x1, y + gap)], fill=INK, width=1)
+
+
+def single_rule(draw, y, x0=MARGIN, x1=PAGE_W - MARGIN):
+    draw.line([(x0, y), (x1, y)], fill=INK, width=1)
+
+
+def centered(draw, y, text, font, fill):
+    w = draw.textlength(text, font=font)
+    draw.text(((PAGE_W - w) / 2, y), text, font=font, fill=fill)
 
 
 # ---------------------------------------------------------------- icons
-def icon_chip(d, x, y):
-    """Computer chip with circuit pins, ~66x26 box at (x, y)."""
-    d.rectangle([x + 2, y + 3, x + 30, y + 23], outline=NAVY, width=3)
-    d.rectangle([x + 12, y + 9, x + 20, y + 17], fill=NAVY)
-    for py in (7, 13, 19):
-        d.line([(x - 6, y + py), (x + 2, y + py)], fill=NAVY, width=3)
-        d.line([(x + 30, y + py), (x + 40, y + py)], fill=NAVY, width=3)
-    d.line([(x + 40, y + 7), (x + 56, y + 7)], fill=NAVY, width=3)
-    d.line([(x + 40, y + 19), (x + 50, y + 19), (x + 50, y + 24)],
-           fill=NAVY, width=3)
-    d.ellipse([x + 53, y + 4, x + 59, y + 10], fill=RED)
+
+def draw_flags(draw, cx, cy):
+    """Three small flags on poles, for the summit story."""
+    colours = [RED, NAVY, RED]
+    for i, colour in enumerate(colours):
+        x = cx - 30 + i * 30
+        draw.line([(x, cy - 16), (x, cy + 20)], fill=INK, width=2)
+        draw.rectangle([x, cy - 16, x + 24, cy - 2], fill=colour)
+        draw.line([(x, cy - 2), (x + 24, cy - 2)], fill=WHITE, width=2)
 
 
-def icon_dish(d, x, y):
-    """Probe / dish with signal arcs among stars, ~66x26 box."""
-    d.arc([x, y + 2, x + 26, y + 26], start=300, end=120, fill=NAVY, width=3)
-    d.line([(x + 13, y + 14), (x + 24, y + 4)], fill=NAVY, width=3)
-    d.ellipse([x + 23, y + 2, x + 27, y + 6], fill=RED)
-    d.line([(x + 8, y + 20), (x + 13, y + 13), (x + 18, y + 20)],
-           fill=NAVY, width=3)
-    for r in (7, 12):
-        d.arc([x + 30, y - 2, x + 30 + 2 * r, y - 2 + 2 * r],
-              start=270, end=360, fill=NAVY, width=2)
-    for sx, sy in ((x + 52, y + 16), (x + 60, y + 6), (x + 46, y + 22)):
-        d.line([(sx - 2, sy), (sx + 2, sy)], fill=NAVY, width=2)
-        d.line([(sx, sy - 2), (sx, sy + 2)], fill=NAVY, width=2)
+def draw_chart(draw, cx, cy):
+    """A plunging line chart, for the markets story."""
+    x0, y0 = cx - 32, cy - 18
+    draw.line([(x0, y0 + 34), (x0 + 64, y0 + 34)], fill=NAVY, width=2)
+    draw.line([(x0, y0 + 34), (x0, y0)], fill=NAVY, width=2)
+    pts = [(x0 + 4, y0 + 6), (x0 + 18, y0 + 10), (x0 + 30, y0 + 9),
+           (x0 + 42, y0 + 20), (x0 + 54, y0 + 26), (x0 + 62, y0 + 30)]
+    draw.line(pts, fill=RED, width=3, joint="curve")
+    draw.ellipse([pts[-1][0] - 3, pts[-1][1] - 3,
+                  pts[-1][0] + 3, pts[-1][1] + 3], fill=RED)
 
 
-def icon_chart_down(d, x, y):
-    """Plunging market chart: axes, descending line, red arrowhead."""
-    d.line([(x, y + 26), (x + 62, y + 26)], fill=NAVY, width=3)
-    d.line([(x, y), (x, y + 26)], fill=NAVY, width=3)
-    pts = [(x + 4, y + 4), (x + 18, y + 8), (x + 30, y + 6),
-           (x + 44, y + 16), (x + 56, y + 24)]
-    d.line(pts, fill=RED, width=4, joint="curve")
-    # arrowhead at the end of the fall
-    d.polygon([(x + 56, y + 24), (x + 48, y + 20), (x + 52, y + 28)],
-              fill=RED)
+def draw_chip(draw, cx, cy):
+    """A computer chip, for the tech story."""
+    draw.rectangle([cx - 22, cy - 16, cx + 22, cy + 16],
+                   outline=NAVY, width=3)
+    draw.rectangle([cx - 10, cy - 8, cx + 10, cy + 8],
+                   outline=NAVY, width=2)
+    for dx in (-14, 0, 14):
+        draw.line([(cx + dx, cy - 24), (cx + dx, cy - 16)], fill=NAVY, width=2)
+        draw.line([(cx + dx, cy + 16), (cx + dx, cy + 24)], fill=NAVY, width=2)
+    for dy in (-8, 8):
+        draw.line([(cx - 30, cy + dy), (cx - 22, cy + dy)], fill=NAVY, width=2)
+        draw.line([(cx + 22, cy + dy), (cx + 30, cy + dy)], fill=NAVY, width=2)
+    draw.ellipse([cx + 14, cy - 20, cx + 20, cy - 14], fill=RED)
 
 
-def icon_flags(d, x, y):
-    """Three small summit flags (US / China / Russia) on poles."""
-    pole_top, pole_bot = y + 2, y + 26
-    for i, fx in enumerate((x + 2, x + 24, x + 46)):
-        d.line([(fx, pole_top), (fx, pole_bot)], fill=INK, width=2)
-    fx = x + 4
-    d.rectangle([fx, pole_top, fx + 16, pole_top + 10], fill=RED)
-    d.rectangle([fx, pole_top, fx + 7, pole_top + 5], fill=NAVY)
-    fx = x + 26
-    d.rectangle([fx, pole_top, fx + 16, pole_top + 10], fill=RED)
-    d.ellipse([fx + 2, pole_top + 2, fx + 5, pole_top + 5], fill=CREAM)
-    fx = x + 48
-    d.rectangle([fx, pole_top, fx + 16, pole_top + 3], fill=(240, 240, 240))
-    d.rectangle([fx, pole_top + 3, fx + 16, pole_top + 7], fill=NAVY)
-    d.rectangle([fx, pole_top + 7, fx + 16, pole_top + 10], fill=RED)
+def draw_star_circle(draw, cx, cy):
+    """A ring of twelve stars (small dots), for the Europe story."""
+    for k in range(12):
+        a = 2 * math.pi * k / 12 - math.pi / 2
+        x = cx + 20 * math.cos(a)
+        y = cy + 20 * math.sin(a)
+        draw.ellipse([x - 3, y - 3, x + 3, y + 3], fill=NAVY)
+    draw.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=RED)
 
 
-def icon_eu(d, x, y):
-    """EU circle of stars: navy ring with cream stars."""
-    cx, cy = x + 30, y + 13
-    d.ellipse([cx - 13, cy - 13, cx + 13, cy + 13], outline=NAVY, width=3)
-    for i in range(8):
-        ang = math.radians(i * 45 - 90)
-        sx, sy = cx + 8 * math.cos(ang), cy + 8 * math.sin(ang)
-        d.line([(sx - 2, sy), (sx + 2, sy)], fill=NAVY, width=2)
-        d.line([(sx, sy - 2), (sx, sy + 2)], fill=NAVY, width=2)
-    d.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=RED)
+def draw_dish(draw, cx, cy):
+    """A satellite dish beaming a signal, for the science story."""
+    draw.arc([cx - 30, cy - 26, cx + 6, cy + 10], start=270, end=90,
+             fill=NAVY, width=4)
+    draw.line([(cx - 12, cy - 8), (cx + 10, cy + 10)], fill=NAVY, width=3)
+    draw.line([(cx - 2, cy + 16), (cx + 14, cy + 16)], fill=NAVY, width=3)
+    for r in (16, 24):
+        draw.arc([cx + 2, cy - 22 - r, cx + 2 + 2 * r, cy - 22 + r],
+                 start=300, end=60, fill=RED, width=2)
 
 
-# ---------------------------------------------------------------- lead art
-def lead_art(d, x0, y0, x1, y1):
-    """Scales of justice with court columns behind, in box (x0,y0)-(x1,y1)."""
-    # fluted court columns at the back
-    for cx in (x0 + 26, x0 + 96, x0 + 166):
-        d.rectangle([cx - 12, y0 + 14, cx + 12, y1 - 8], fill=NAVY)
-        d.rectangle([cx - 18, y0 + 6, cx + 18, y0 + 14], fill=NAVY)
-        d.rectangle([cx - 18, y1 - 8, cx + 18, y1], fill=NAVY)
-    # scales: central pillar, crossbeam, two hanging pans
-    cx = (x0 + x1) // 2
-    top, bot = y0 + 34, y1 - 6
-    d.line([(cx, top), (cx, bot)], fill=INK, width=5)
-    d.line([(cx - 78, top + 22), (cx + 78, top + 22)], fill=INK, width=5)
-    d.ellipse([cx - 6, top - 8, cx + 6, top + 4], fill=RED)  # finial
-    for sgn in (-1, 1):
-        px = cx + sgn * 78
-        d.line([(px, top + 22), (px - 26, top + 62)], fill=INK, width=3)
-        d.line([(px, top + 22), (px + 26, top + 62)], fill=INK, width=3)
-        d.line([(px, top + 22), (px, top + 62)], fill=INK, width=3)
-        # pan: shallow bowl
-        d.arc([px - 28, top + 52, px + 28, top + 82], start=0, end=180,
-              fill=INK, width=4)
-        d.line([(px - 28, top + 67), (px + 28, top + 67)], fill=INK, width=3)
-    # base
-    d.rectangle([cx - 46, bot, cx + 46, bot + 6], fill=INK)
-    d.rectangle([cx - 30, bot - 10, cx + 30, bot], fill=INK)
+def draw_scales(draw, x0, y0, x1, y1):
+    """Scales of justice standing between two navy columns."""
+    # Two columns with capitals and bases.
+    col_w = 26
+    for cx in (x0 + 8, x1 - 8 - col_w):
+        draw.rectangle([cx, y0, cx + col_w, y1 - 14], fill=NAVY)
+        draw.rectangle([cx - 5, y0, cx + col_w + 5, y0 + 8], fill=NAVY)
+        draw.rectangle([cx - 5, y1 - 22, cx + col_w + 5, y1 - 14], fill=NAVY)
+    mid = (x0 + x1) // 2
+    # Central post, beam and pans.
+    draw.line([(mid, y0 + 26), (mid, y1 - 26)], fill=INK, width=4)
+    draw.line([(mid - 62, y0 + 34), (mid + 62, y0 + 34)], fill=INK, width=3)
+    draw.ellipse([mid - 5, y0 + 18, mid + 5, y0 + 28], fill=RED)
+    for end in (mid - 62, mid + 62):
+        draw.line([(end, y0 + 34), (end - 20, y0 + 62)], fill=INK, width=2)
+        draw.line([(end, y0 + 34), (end + 20, y0 + 62)], fill=INK, width=2)
+        draw.line([(end - 20, y0 + 62), (end + 20, y0 + 62)], fill=INK, width=2)
+        draw.arc([end - 20, y0 + 48, end + 20, y0 + 76], start=0, end=180,
+                 fill=INK, width=2)
+    draw.rectangle([mid - 30, y1 - 26, mid + 30, y1 - 14], fill=INK)
 
 
 # ---------------------------------------------------------------- page
-def main():
-    img = Image.new("RGB", (W, H), PAPER)
-    d = ImageDraw.Draw(img)
 
-    # masthead ------------------------------------------------------
-    hrule(d, 16, wdt=3)
-    hrule(d, 22, wdt=1)
-    d.text(((CX0 + CX1) / 2, 28), "THE WORLD IN ONE PICTURE",
-           font=font(SERIF_BLACK, 30), fill=INK, anchor="ma")
-    hrule(d, 70, wdt=2)
+def build():
+    img = Image.new("RGB", (PAGE_W, PAGE_H), PAPER)
+    draw = ImageDraw.Draw(img)
 
-    # the date -- the single most important element ------------------
-    d.text(((CX0 + CX1) / 2, 76), "THURSDAY",
-           font=font(SERIF_BLACK, 76), fill=INK, anchor="ma")
-    d.text(((CX0 + CX1) / 2, 152), "19 NOVEMBER 2026",
-           font=font(SERIF_BOLD, 40), fill=RED, anchor="ma")
-    hrule(d, 196, wdt=5)
-    hrule(d, 205, wdt=1)
+    masthead_f = load(SERIF_BLACK, 36)
+    weekday_f = load(SERIF_BLACK, 92)
+    date_f = load(SERIF_BLACK, 40)
+    kicker_f = load(SANS_BOLD, 18)
+    lead_head_f = load(SANS_BLACK, 42)
+    head_f = load(SANS_BLACK, 34)
+    deck_f = load(SANS_BOLD, 18)
+    lead_deck_f = load(SANS_BOLD, 19)
+    ticker_f = load(SANS_BOLD, 20)
 
-    # lead story ------------------------------------------------------
-    lead_top, lead_bot = 217, 402
-    d.text((40, lead_top + 6), "WORLD COURT",
-           font=font(SANS_BOLD, 22), fill=RED)
-    y = block(d, 40, lead_top + 36,
-              "MYANMAR COMMITTED GENOCIDE, WORLD COURT RULES",
-              font(SANS_BLACK, 32), 37, 700)
-    y = block(d, 40, y + 6,
-              "The International Court of Justice finds Myanmar responsible "
-              "for genocide against the Rohingya in its 2017 clearance "
-              "operations, in a 9–6 vote in Gambia v. Myanmar, and orders "
-              "restitution.",
-              font(SANS_REG, 19), 22, 700)
-    assert y <= lead_bot, f"lead text overflows: {y} > {lead_bot}"
-    lead_art(d, 762, lead_top + 4, 984, lead_bot - 4)
-    hrule(d, 410, wdt=2)
+    # ---- header: double rule, masthead, weekday, red date, double rule
+    double_rule(draw, 10)
+    centered(draw, 22, "THE WORLD IN ONE PICTURE", masthead_f, INK)
+    single_rule(draw, 64)
+    centered(draw, 70, "THURSDAY", weekday_f, INK)
+    centered(draw, 166, "19 NOVEMBER 2026", date_f, RED)
+    double_rule(draw, 214)
 
-    # five story rows -------------------------------------------------
-    rows = [
+    # ---- lead story
+    lead_top = 232
+    lead_text_w = 700
+    draw.text((MARGIN, lead_top), "WORLD COURT", font=kicker_f, fill=RED)
+    lead_head = ["MYANMAR COMMITTED GENOCIDE,", "WORLD COURT RULES"]
+    hy = lead_top + 24
+    for line in lead_head:
+        draw.text((MARGIN, hy), line, font=lead_head_f, fill=INK)
+        hy += 44
+    lead_deck = ("The International Court of Justice finds Myanmar "
+                 "responsible for genocide against the Rohingya in its "
+                 "2017 clearance operations, in a 9–6 vote in Gambia v. "
+                 "Myanmar, and orders restitution.")
+    dy = hy + 4
+    for line in fit_lines(draw, lead_deck, lead_deck_f, lead_text_w, 3):
+        draw.text((MARGIN, dy), line, font=lead_deck_f, fill=INK)
+        dy += 23
+    draw_scales(draw, 790, lead_top + 4, 996, lead_top + 178)
+    single_rule(draw, 420)
+
+    # ---- five story rows
+    stories = [
         ("SUMMIT", "TRUMP, XI AND PUTIN ISSUE JOINT PEACE DECLARATION",
          "The three leaders sign a four-point 'Declaration toward Peace' "
          "on the APEC sidelines in Shenzhen, pledging nuclear-risk "
-         "dialogue — but no major peace deal.", icon_flags),
+         "dialogue — but no major peace deal.", draw_flags, True),
         ("MARKETS", "DOW PLUNGES 1,100 AS SELL-OFF DEEPENS",
          "The Dow falls 2.2% to 49,097 and the S&P 500 drops for a sixth "
-         "straight session as the AI-driven sell-off spreads.",
-         icon_chart_down),
+         "straight session as the AI-driven sell-off spreads.", draw_chart,
+         False),
         ("TECH", "ANTHROPIC'S RECORD $81BN IPO DEBUTS",
          "The Claude maker's shares price at $83, open at $111.50 and "
-         "close near $97 in the largest IPO ever.", icon_chip),
+         "close near $97 in the largest IPO ever.", draw_chip, False),
         ("EUROPE", "EU PROPOSES €45BN LOAN TO BACK UKRAINE",
          "Brussels unveils a €45 billion loan to support Ukraine as the "
-         "war grinds on.", icon_eu),
+         "war grinds on.", draw_star_circle, False),
         ("SCIENCE", "VOYAGER 1 PASSES ONE LIGHT-DAY FROM EARTH",
          "NASA's probe reaches about 16 billion miles from home, though "
-         "a computer glitch is blocking its science data.", icon_dish),
+         "a computer glitch is blocking its science data.", draw_dish,
+         False),
     ]
-    row_top, row_h = 420, 105
-    for i, (kicker, head, deck, icon) in enumerate(rows):
-        ry = row_top + i * row_h
-        d.text((CX0, ry + 4), kicker, font=font(SANS_BOLD, 18), fill=RED)
-        head_lines = wrap(d, head, font(SANS_BLACK, 28), 860)
-        assert len(head_lines) == 1, f"row {kicker} headline wraps: {head_lines}"
-        d.text((CX0, ry + 26), head, font=font(SANS_BLACK, 28), fill=INK)
-        y = block(d, CX0, ry + 57, deck, font(SANS_REG, 18), 21, 860)
-        assert y <= ry + row_h, f"row {kicker} overflows: {y} > {ry + row_h}"
-        icon(d, CX1 - 70, ry + 34)
-        if i < len(rows) - 1:
-            hrule(d, ry + row_h - 2, wdt=1)
 
-    # ticker -------------------------------------------------------------
-    band_top, band_bot = 948, 1014
-    d.rectangle([0, band_top, W, band_bot], fill=INK)
+    y = 428
+    for kicker, headline, deck, icon, two_line_head in stories:
+        draw.text((MARGIN, y), kicker, font=kicker_f, fill=RED)
+        if two_line_head:
+            # The summit headline is too long for one 34px line, so it
+            # takes two lines and this row gets extra height.
+            parts = ["TRUMP, XI AND PUTIN ISSUE", "JOINT PEACE DECLARATION"]
+            hy2 = y + 21
+            for line in parts:
+                draw.text((MARGIN, hy2), line, font=head_f, fill=INK)
+                hy2 += 35
+            dy2 = hy2 + 6
+            row_h = 138
+        else:
+            draw.text((MARGIN, y + 21), headline, font=head_f, fill=INK)
+            dy2 = y + 58
+            row_h = 100
+        for line in fit_lines(draw, deck, deck_f, ROW_TEXT_W, 2):
+            draw.text((MARGIN, dy2), line, font=deck_f, fill=INK)
+            dy2 += 20
+        icon_cx = PAGE_W - MARGIN - 38
+        icon_cy = y + row_h // 2
+        icon(draw, icon_cx, icon_cy)
+        y += row_h
+        single_rule(draw, y)
+
+    # ---- bottom ticker band
+    band_top = y + 4
+    draw.rectangle([0, band_top, PAGE_W, PAGE_H], fill=NAVY)
     ticker = ("ALSO TODAY · US Senate rejects Iran war-powers resolution "
               "51–48 · Trump posthumously pardons Pete Rose · Texans beat "
               "Colts 26–3 as Stroud throws 3 TDs")
-    lines = wrap(d, ticker, font(COND_BOLD, 24), 940)
-    assert len(lines) <= 2, f"ticker needs {len(lines)} lines"
-    ty = band_top + (band_bot - band_top - len(lines) * 28) // 2
-    for line in lines:
-        d.text((W / 2, ty), line, font=font(COND_BOLD, 24), fill=CREAM,
-               anchor="ma")
-        ty += 28
+    ty = band_top + 6
+    for line in fit_lines(draw, ticker, ticker_f, TEXT_W, 2):
+        centered(draw, ty, line, ticker_f, WHITE)
+        ty += 24
 
-    img.save("entry.png", optimize=True)
-    print("wrote entry.png")
+    img.save(OUT_PATH, "PNG", optimize=True)
+    size = os.path.getsize(OUT_PATH)
+    print(f"Wrote {OUT_PATH}: {img.size[0]}x{img.size[1]}, {size} bytes")
+    assert size <= 1_048_576, f"entry.png too large: {size} bytes"
 
 
 if __name__ == "__main__":
-    main()
+    build()
